@@ -2,7 +2,7 @@ mod error;
 
 use error::{Error, Result};
 use z3::ast::{Ast, Int};
-use z3::{ast, Config, Context, SatResult, Solver, Optimize};
+use z3::{ast, Config, Context, Optimize, SatResult, Solver};
 
 fn main() -> Result<()> {
     println!("Hello, world!");
@@ -77,6 +77,8 @@ fn test_xkcd_solver() -> Result<()> {
     );
     println!();
     let mut answers = Vec::<Vec<u64>>::new();
+
+    // Since there is more than one answer, we iterate over our model:
     while solver.check() == SatResult::Sat {
         let model = solver.get_model();
         let mixed_fruit_res = model.eval(&mixed_fruit).unwrap();
@@ -126,9 +128,90 @@ fn test_wood_workshop_solver() -> Result<()> {
     // Problem is on p.31 here:
     // https://yurichev.com/writings/SAT_SMT_by_example.pdf
 
+    // Linear Programming.
+
+    // you have a 6"x13" plywood work pieces
+    // you need 800 rectangles that are 4"x5" (Output A)
+    // you need 400 rectangles that are 2"x3" (Output B)
+
+    // To cut a piece as A/B rectangles, you can cut a 6*13 workpiece in 4 ways. Or, to put it in
+    // another way, you can placeA/B rectangles on 6*13 rectangle in 4 ways:
+
+    // - Cut A (Output A: 3, Output B: 1)
+    // - Cut B (Output A: 2, Output B: 6)
+    // - Cut C (Output A: 1, Output B: 9)
+    // - Cut D (Output A: 0, Output B: 13)
+
+    // Which cuts are most efficient? You want to consume as little workpieces as possible.
+
     let cfg = Config::new();
     let ctx = Context::new(&cfg);
     let optimize = Optimize::new(&ctx);
+
+    let workpieces_total = ast::Int::new_const(&ctx, "workpieces total");
+    let a_cuts = ast::Int::new_const(&ctx, "a cuts");
+    let b_cuts = ast::Int::new_const(&ctx, "b cuts");
+    let c_cuts = ast::Int::new_const(&ctx, "c cuts");
+    let d_cuts = ast::Int::new_const(&ctx, "d cuts");
+
+    let output_a = ast::Int::new_const(&ctx, "output a");
+    let output_b = ast::Int::new_const(&ctx, "output b");
+
+    let zero = ast::Int::from_u64(&ctx, 0);
+    optimize.assert(&a_cuts.ge(&zero));
+    optimize.assert(&b_cuts.ge(&zero));
+    optimize.assert(&c_cuts.ge(&zero));
+    optimize.assert(&d_cuts.ge(&zero));
+
+    optimize.assert(
+        &a_cuts
+            .add(&[&b_cuts, &c_cuts, &d_cuts])
+            ._eq(&workpieces_total),
+    );
+
+    // set the requirement that we must have 800 output_a's
+    optimize.assert(
+        &a_cuts
+            .mul(&[&ast::Int::from_u64(&ctx, 3)])
+            .add(&[
+                &b_cuts.mul(&[&ast::Int::from_u64(&ctx, 2)]),
+                &c_cuts.mul(&[&ast::Int::from_u64(&ctx, 1)]),
+                &d_cuts.mul(&[&ast::Int::from_u64(&ctx, 0)]), // remove this?
+            ])
+            ._eq(&ast::Int::from_u64(&ctx, 800)),
+    );
+
+    // set the requirement that we must have 400 output_a's
+    optimize.assert(
+        &a_cuts
+            .mul(&[&ast::Int::from_u64(&ctx, 1)])
+            .add(&[
+                &b_cuts.mul(&[&ast::Int::from_u64(&ctx, 6)]),
+                &c_cuts.mul(&[&ast::Int::from_u64(&ctx, 9)]),
+                &d_cuts.mul(&[&ast::Int::from_u64(&ctx, 13)]),
+            ])
+            ._eq(&ast::Int::from_u64(&ctx, 400)),
+    );
+
+    optimize.minimize(&workpieces_total);
+
+    assert_eq!(optimize.check(&[]), SatResult::Sat);
+    let model = optimize.get_model();
+    let a_cuts_res = model.eval(&a_cuts).unwrap().as_u64().unwrap();
+    let b_cuts_res = model.eval(&b_cuts).unwrap().as_u64().unwrap();
+    let c_cuts_res = model.eval(&c_cuts).unwrap().as_u64().unwrap();
+    let d_cuts_res = model.eval(&d_cuts).unwrap().as_u64().unwrap();
+    let workpieces_total_res = model.eval(&workpieces_total).unwrap().as_u64().unwrap();
+
+    println!(
+        "a_cuts: {}, b_cuts: {}, c_cuts: {}, d_cuts: {}, workpieces_total: {}",
+        a_cuts_res, b_cuts_res, c_cuts_res, d_cuts_res, workpieces_total_res
+    );
+    assert_eq!(a_cuts_res, 250);
+    assert_eq!(b_cuts_res, 25);
+    assert_eq!(c_cuts_res, 0);
+    assert_eq!(d_cuts_res, 0);
+    assert_eq!(workpieces_total_res, 275);
 
     println!("test_wood_workshop passed.");
     Ok(())
